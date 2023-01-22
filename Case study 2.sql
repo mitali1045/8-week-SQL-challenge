@@ -218,3 +218,161 @@ group by cs.customer_id;
 select cs.customer_id, avg(ro.distance)
 from customer_orders cs join runner_orders ro on cs.order_id = ro.order_id
 group by(cs.customer_id);
+
+--5. What was the difference between the longest and shortest delivery 
+--times for all orders?
+
+select cs.order_id, max(date_part('minute',cs.order_time::Timestamp)) - min(date_part('minute',cs.order_time::Timestamp))
+from customer_orders cs join runner_orders ro on cs.order_id = ro.order_id
+where ro.duration is not null or ro.duration <> 'null'
+group by(cs.order_id)
+order by cs.order_id;
+
+--6.What was the average speed for each runner for each delivery and 
+--do you notice any trend for these values?
+
+select ro.order_id,count(ro.order_id) as no_of_orders,ro.runner_id,avg(substring(ro.distance from '[0-9]+')::numeric/substring(ro.duration from '[0-9]+')::numeric) as avg_speed
+from customer_orders cs join runner_orders ro on cs.order_id = ro.order_id
+where (ro.duration is not null or ro.duration <> 'null') and (ro.distance is not null or ro.distance <> 'null')
+group by(ro.order_id,ro.runner_id)
+order by no_of_orders desc;
+
+--7.What is the successful delivery percentage for each runner?
+
+with q1 as (Select r1.runner_id, count(r1.runner_id) as exp_count
+  from runner_orders r1  
+  where r1.cancellation = '' or r1.cancellation is null or r1.cancellation = 'null'
+  group by r1.runner_id),
+ q2 as (Select r2.runner_id, count(r2.runner_id) as norm_count
+  from runner_orders r2 
+  group by r2.runner_id)
+select q1.runner_id, (q1.exp_count::float/q2.norm_count::float)*100 as success_percent
+from q1,q2
+where q1.runner_id = q2.runner_id;
+
+
+--C. Ingredient Optimisation
+
+--1.What are the standard ingredients for each pizza?
+drop function ingredients_
+
+create or replace function ingredients_(pid int)
+returns setof text as 
+$$
+declare
+topping text[];
+top text;
+begin
+	for topping in
+		select array[toppings] from pizza_recipes where pizza_id = pid
+		loop
+			foreach top in array topping
+			loop
+				return query select topping_name 
+				from pizza_toppings
+				where top = topping_id::text;
+			end loop;
+		end loop;
+end;
+$$ language plpgsql;
+
+select * from ingredients_(1);
+
+--2.What was the most commonly added extra?
+
+select extras,count(extras) as extras_count
+from customer_orders
+where extras <> '' and extras is not null and extras <> 'null'
+group by(extras)
+order by extras_count desc limit 1;
+
+--3.What was the most common exclusion?
+
+select exclusions,count(exclusions) as exclusions_count
+from customer_orders
+where exclusions <> '' and exclusions is not null and exclusions <> 'null'
+group by(exclusions)
+order by exclusions_count desc limit 1;
+
+--4. Generate an order item for each record in the customers_orders 
+--table in the format of one of the following:
+
+create table customer_orders_mt(
+  "order_id" INTEGER,
+  "customer_id" INTEGER,
+  "pizza_id" INTEGER,
+  "exclusions" VARCHAR(4),
+  "extras" VARCHAR(4),
+  "order_time" TIMESTAMP
+);
+
+--a. Meat lovers
+insert into customer_orders_mt values
+()
+
+--5. Generate an alphabetically ordered comma separated ingredient list for 
+--each pizza order from the customer_orders table and add a 2x in 
+--front of any relevant ingredients
+
+--For example: "Meat Lovers: 2xBacon, Beef, ... , Salami"
+
+
+create view temp_data as 
+select order_id,customer_orders.pizza_id,toppings,extras
+from customer_orders join pizza_recipes on customer_orders.pizza_id = pizza_recipes.pizza_id
+where (string_to_array(extras, ',')::text[]) <@ (string_to_array(toppings, ',')::text[])
+and extras <> ''
+order by order_id;
+
+select *
+from (select order_id,pizza_id,toppings,extras, 
+	  concat(toppings,',',unnest(string_to_array(extras, ',')::text[])) as extra_toppings
+	  from temp_data)q; 
+	  
+	  
+--6.What is the total quantity of each ingredient used in all delivered pizzas
+--sorted by most frequent first?
+
+select topping, count(*) as count_topping
+from customer_orders join pizza_recipes on customer_orders.pizza_id = pizza_recipes.pizza_id
+cross join lateral unnest(string_to_array(toppings, ',')::int[]) x(topping)
+group by x.topping
+order by count_topping desc;
+
+--D. Pricing and Ratings
+
+--1. If a Meat Lovers pizza costs $12 and Vegetarian costs $10 and there were no charges
+--for changes - how much money has Pizza Runner made so far if there are no delivery fees?
+
+select runner_id,
+sum(case when pizza_id = 1 then 12 end) +
+sum(case when pizza_id = 2 then 10 end) as Total 
+from customer_orders join runner_orders on customer_orders.order_id = runner_orders.order_id
+group by runner_id;
+
+--2.What if there was an additional $1 charge for any pizza extras?
+--Add cheese is $1 extra
+
+select runner_id,
+sum(case when pizza_id = 1 then 12 end) +
+sum(case when pizza_id = 2 then 10 end) +
+(Select sum(cardinality(string_to_array(extras,',')::int[])) 
+ from customer_orders 
+ where extras is not null and extras <> 'null' and extras <> '') as Total 
+from customer_orders join runner_orders on customer_orders.order_id = runner_orders.order_id
+group by runner_id;
+
+--3.The Pizza Runner team now wants to add an additional ratings system that allows
+--customers to rate their runner, how would you design an additional table for this
+--new dataset - generate a schema for this new table and insert your own data for 
+--ratings for each successful customer order between 1 to 5.
+
+
+
+CREATE TABLE runner_ratings (
+  "runner_id" INTEGER,
+  "order_id" INTEGER,
+	"rating" INTEGER,
+	"customer_id"  INTEGER
+);
+
